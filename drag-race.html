@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Simple Drag-Strip Simulator</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;margin:18px;background:#0b0b0b;color:#e8e8e8}
+    .card{background:#121212;padding:14px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,.6);margin-bottom:12px}
+    label{display:block;font-size:13px;margin-top:8px}
+    input,select{width:100%;padding:8px;margin-top:6px;border-radius:6px;background:#0f0f0f;border:1px solid #222;color:#fff}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    button{padding:10px 14px;border-radius:8px;border:0;background:#1f8ef1;color:white;font-weight:600;cursor:pointer}
+    .results{display:flex;gap:12px;align-items:center}
+    .big{font-size:18px;font-weight:700}
+    .small{font-size:13px;color:#cfcfcf}
+    .winner{background:linear-gradient(90deg,#134e4a,#0ea5a4);padding:8px;border-radius:8px}
+    .muted{color:#9aa0a6;font-size:13px}
+    .flex{display:flex;gap:8px}
+    footer{margin-top:18px;color:#9aa0a6;font-size:13px}
+  </style>
+</head>
+<body>
+  <h1>Simple Drag-Strip Simulator (online)</h1>
+  <p class="muted">Search production cars (via CarQuery) to autofill make/model/year, then pick or set an engine. The simulator runs a 1/4 mile (402.336 m) numerical integration based on horsepower and weight.</p>
+
+  <div class="card">
+    <strong>1) Search car (CarQuery)</strong>
+    <div style="margin-top:8px">
+      <label>Make</label>
+      <select id="makeSelect"></select>
+      <label>Model</label>
+      <select id="modelSelect"></select>
+      <label>Year</label>
+      <select id="yearSelect"></select>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button id="fillCarA">Use for Car A</button>
+        <button id="fillCarB">Use for Car B</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <strong>Car A</strong>
+      <label>Display name</label>
+      <input id="nameA" placeholder="Car A - e.g., 2020 Honda Civic Type R">
+      <label>Horsepower (hp)</label>
+      <input id="hpA" type="number" value="300">
+      <label>Weight (lbs)</label>
+      <input id="wtA" type="number" value="3200">
+      <label>Drivetrain loss (fraction)</label>
+      <input id="lossA" type="number" step="0.01" value="0.15">
+      <label>Traction factor (0.7-1.5; 1=good tires)</label>
+      <input id="tractA" type="number" step="0.01" value="1.0">
+    </div>
+
+    <div class="card">
+      <strong>Car B</strong>
+      <label>Display name</label>
+      <input id="nameB" placeholder="Car B - e.g., 2018 Mustang GT">
+      <label>Horsepower (hp)</label>
+      <input id="hpB" type="number" value="450">
+      <label>Weight (lbs)</label>
+      <input id="wtB" type="number" value="3600">
+      <label>Drivetrain loss (fraction)</label>
+      <input id="lossB" type="number" step="0.01" value="0.15">
+      <label>Traction factor (0.7-1.5; 1=good tires)</label>
+      <input id="tractB" type="number" step="0.01" value="1.0">
+    </div>
+  </div>
+
+  <div class="card">
+    <strong>Race settings</strong>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <label style="flex:1">Reaction time (s) — leave blank for random 0.1–0.6s</label>
+      <input id="react" type="number" step="0.01" placeholder="random">
+    </div>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button id="raceBtn">Race!</button>
+      <button id="resetBtn">Reset defaults</button>
+    </div>
+  </div>
+
+  <div class="card" id="outputCard" style="display:none">
+    <strong>Results</strong>
+    <div id="resultsArea" style="margin-top:10px"></div>
+  </div>
+
+  <footer>Notes: This is a simple physics-based sim. It integrates power to estimate acceleration, but does not model gearing, turbo lag, or aerodynamic drag precisely. You can tweak drivetrain loss and traction to approximate real behavior.</footer>
+
+  <!-- CarQuery script (public) -->
+  <script src="https://www.carqueryapi.com/js/carquery.0.3.4.js"></script>
+  <script>
+    // --- CarQuery setup to populate make/model/year ---
+    const CQ = new CarQuery();
+    const makeSelect = document.getElementById('makeSelect');
+    const modelSelect = document.getElementById('modelSelect');
+    const yearSelect = document.getElementById('yearSelect');
+
+    CQ.getMakes(function(makes){
+      // sort and populate
+      const arr = makes.sort((a,b)=>a.make_display.localeCompare(b.make_display));
+      arr.forEach(m=>{
+        const opt = document.createElement('option'); opt.value=m.make_name; opt.textContent=m.make_display; makeSelect.appendChild(opt);
+      });
+      // trigger first fetch
+      if(arr.length) loadModels(arr[0].make_name);
+    });
+
+    makeSelect.addEventListener('change', ()=>loadModels(makeSelect.value));
+
+    function loadModels(make){
+      modelSelect.innerHTML=''; yearSelect.innerHTML='';
+      CQ.getModels(make, function(models){
+        // group unique models by model_name
+        const unique = [];
+        const seen = new Set();
+        models.forEach(m=>{ if(!seen.has(m.model_name)){ seen.add(m.model_name); unique.push(m); }});
+        unique.sort((a,b)=>a.model_name.localeCompare(b.model_name));
+        unique.forEach(m=>{ const opt=document.createElement('option'); opt.value=m.model_name; opt.textContent=m.model_name; modelSelect.appendChild(opt); });
+        if(unique.length) loadYears(make, unique[0].model_name);
+      });
+    }
+
+    modelSelect.addEventListener('change', ()=>loadYears(makeSelect.value, modelSelect.value));
+
+    function loadYears(make, model){
+      yearSelect.innerHTML='';
+      CQ.getTrims({make:make, model:model}, function(trims){
+        const years = Array.from(new Set(trims.map(t=>t.model_year))).sort((a,b)=>b-a);
+        years.forEach(y=>{ const opt=document.createElement('option'); opt.value=y; opt.textContent=y; yearSelect.appendChild(opt); });
+      });
+    }
+
+    // fill buttons to populate Car A/B fields
+    document.getElementById('fillCarA').addEventListener('click', ()=>fillCarFromCQ('A'));
+    document.getElementById('fillCarB').addEventListener('click', ()=>fillCarFromCQ('B'));
+
+    function fillCarFromCQ(which){
+      const make = makeSelect.value; const model = modelSelect.value; const year = yearSelect.value;
+      // Set display name; leave hp/wt blank for user to enter
+      const name = `${year} ${make} ${model}`;
+      document.getElementById(which==='A'?'nameA':'nameB').value = name;
+      // try to fetch trims to guess weight/hp if available
+      CQ.getTrims({make:make, model:model, year:year}, function(trims){
+        if(trims && trims.length){
+          const t = trims[0];
+          // CarQuery doesn't reliably include hp or curb weight. We'll try some common fields if present
+          if(t.model_engine_power_hp) document.getElementById(which==='A'?'hpA':'hpB').value = t.model_engine_power_hp;
+          if(t.model_weight_kg) document.getElementById(which==='A'?'wtA':'wtB').value = Math.round(t.model_weight_kg / 0.453592);
+        }
+      });
+    }
+
+    // --- Simulation logic ---
+    function simulateQuarterMile(hp, weight_lbs, drivetrainLoss=0.15, traction=1.0){
+      // Numeric integration to simulate acceleration from rest to 402.336 meters (1/4 mile).
+      // Simple model: power at wheels = hp*(1-loss)*745.7 (watts). Accel = min(power/(m*v), traction*g)
+      // Handle v=0 by using a small velocity floor and allowing traction-limited launch.
+
+      const distanceTarget = 402.336; // meters
+      const g = 9.81;
+      const power = Math.max(1, hp) * 745.7 * Math.max(0, 1 - drivetrainLoss); // watts at wheels
+      const mass = Math.max(1, weight_lbs) * 0.453592; // kg
+
+      let v = 0.0; // m/s
+      let x = 0.0; // m
+      let t = 0.0; // s
+      const dt = 0.005; // small time step
+      let sixtyTime = null; // time when reaches 60 mph (26.8224 m/s)
+
+      // to avoid infinite accel at v=0 when using power/(m*v), start with traction-limited accel until v_small
+      const v_floor = 0.1; // m/s
+
+      while(x < distanceTarget && t < 60){
+        // power-limited acceleration a_p = power/(m*v)
+        const currentV = Math.max(v, v_floor);
+        const a_from_power = power / (mass * currentV); // m/s^2
+        const a_traction = traction * g; // m/s^2
+        // choose the smaller (cannot exceed traction)
+        const a = Math.min(a_from_power, a_traction);
+
+        v += a * dt;
+        x += v * dt;
+        t += dt;
+
+        if(!sixtyTime && v >= 26.8224) sixtyTime = t;
+      }
+
+      const trapSpeed_mps = v;
+      const trapSpeed_mph = trapSpeed_mps * 2.2369362920544;
+
+      return {
+        et: parseFloat(t.toFixed(3)),
+        trap: parseFloat(trapSpeed_mph.toFixed(2)),
+        sixty: sixtyTime?parseFloat(sixtyTime.toFixed(3)):null
+      };
+    }
+
+    // UI hooks
+    document.getElementById('raceBtn').addEventListener('click', ()=>{
+      const nameA = document.getElementById('nameA').value || 'Car A';
+      const nameB = document.getElementById('nameB').value || 'Car B';
+      const hpA = parseFloat(document.getElementById('hpA').value) || 200;
+      const hpB = parseFloat(document.getElementById('hpB').value) || 200;
+      const wtA = parseFloat(document.getElementById('wtA').value) || 3000;
+      const wtB = parseFloat(document.getElementById('wtB').value) || 3000;
+      const lossA = parseFloat(document.getElementById('lossA').value) || 0.15;
+      const lossB = parseFloat(document.getElementById('lossB').value) || 0.15;
+      const tractA = parseFloat(document.getElementById('tractA').value) || 1.0;
+      const tractB = parseFloat(document.getElementById('tractB').value) || 1.0;
+
+      // reaction time
+      let react = parseFloat(document.getElementById('react').value);
+      if(!react || react <= 0) react = (Math.random() * 0.5) + 0.1; // 0.1 - 0.6 s
+
+      const simA = simulateQuarterMile(hpA, wtA, lossA, tractA);
+      const simB = simulateQuarterMile(hpB, wtB, lossB, tractB);
+
+      // add reaction time to elapsed times to determine who crosses first
+      const etA_with_reaction = simA.et + react;
+      const etB_with_reaction = simB.et + react; // same light for fairness
+
+      const winner = etA_with_reaction < etB_with_reaction ? 'A' : (etB_with_reaction < etA_with_reaction ? 'B' : 'Tie');
+
+      const resultsArea = document.getElementById('resultsArea');
+      document.getElementById('outputCard').style.display = 'block';
+      resultsArea.innerHTML = `
+        <div style="display:flex;gap:12px">
+          <div style="flex:1" class="card">
+            <div class="big">${nameA}</div>
+            <div class="small">ET (1/4 mi): <strong>${simA.et}s</strong></div>
+            <div class="small">Trap speed: <strong>${simA.trap} mph</strong></div>
+            <div class="small">60 ft / 60 mph: <strong>${simA.sixty?simA.sixty+'s':'—'}</strong></div>
+            <div class="small">HP: ${hpA} | Wt: ${wtA} lbs | Loss: ${lossA} | Traction: ${tractA}</div>
+          </div>
+
+          <div style="flex:1" class="card">
+            <div class="big">${nameB}</div>
+            <div class="small">ET (1/4 mi): <strong>${simB.et}s</strong></div>
+            <div class="small">Trap speed: <strong>${simB.trap} mph</strong></div>
+            <div class="small">60 ft / 60 mph: <strong>${simB.sixty?simB.sixty+'s':'—'}</strong></div>
+            <div class="small">HP: ${hpB} | Wt: ${wtB} lbs | Loss: ${lossB} | Traction: ${tractB}</div>
+          </div>
+        </div>
+
+        <div style="margin-top:10px;padding:10px;border-radius:8px;background:#071018">
+          <div class="flex">
+            <div>Reaction time used: <strong>${react.toFixed(3)} s</strong></div>
+            <div>Winner: <strong class="${winner==='A'?'winner':''}${winner==='B'?'winner':''}">${winner==='Tie'?'Tie':(winner==='A'?nameA:nameB)}</strong></div>
+          </div>
+          <div style="margin-top:8px;color:#9aa0a6">*Times shown are run times from green (reaction time added). For comparing raw vehicle performance ignore reaction time (see ET fields).</div>
+        </div>
+      `;
+    });
+
+    document.getElementById('resetBtn').addEventListener('click', ()=>{
+      document.getElementById('hpA').value = 300; document.getElementById('wtA').value = 3200; document.getElementById('lossA').value=0.15; document.getElementById('tractA').value=1.0; document.getElementById('nameA').value='';
+      document.getElementById('hpB').value = 450; document.getElementById('wtB').value = 3600; document.getElementById('lossB').value=0.15; document.getElementById('tractB').value=1.0; document.getElementById('nameB').value='';
+      document.getElementById('outputCard').style.display='none';
+    });
+
+  </script>
+</body>
+</html>
